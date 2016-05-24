@@ -7,6 +7,7 @@
  * SmartCABLE
  *
  *    (c) Copyright 1999-2001  Quicknet Technologies, Inc.
+ *    (c) Copyright 2016 Sergiusz Bazanski <sergiusz@bazanski.pl>
  *
  *    This program is free software; you can redistribute it and/or
  *    modify it under the terms of the GNU General Public License
@@ -266,6 +267,7 @@
 #include <linux/timer.h>
 #include <linux/delay.h>
 #include <linux/pci.h>
+#include <linux/seq_file.h>
 
 #include <asm/io.h>
 #include <asm/uaccess.h>
@@ -2772,13 +2774,11 @@ static ssize_t ixj_read(struct file * file_p, char __user *buf, size_t length, l
 			j->flags.inread = 0;
 			return 0;
 		}
-		interruptible_sleep_on(&j->read_q);
-		if (signal_pending(current)) {
-			set_current_state(TASK_RUNNING);
-			remove_wait_queue(&j->read_q, &wait);
-			j->flags.inread = 0;
-			return -EINTR;
-		}
+        wait_event_interruptible(j->read_q, signal_pending(current));
+        // TODO(q3k): Should we do this?
+		//set_current_state(TASK_RUNNING);
+		remove_wait_queue(&j->read_q, &wait);
+		j->flags.inread = 0;
 	}
 
 	remove_wait_queue(&j->read_q, &wait);
@@ -2853,13 +2853,11 @@ static ssize_t ixj_write(struct file *file_p, const char __user *buf, size_t cou
 			j->flags.inwrite = 0;
 			return 0;
 		}
-		interruptible_sleep_on(&j->write_q);
-		if (signal_pending(current)) {
-			set_current_state(TASK_RUNNING);
-			remove_wait_queue(&j->write_q, &wait);
-			j->flags.inwrite = 0;
-			return -EINTR;
-		}
+        wait_event_interruptible(j->write_q, signal_pending(current));
+        // TODO(q3k): should we do this?
+		//set_current_state(TASK_RUNNING);
+		remove_wait_queue(&j->write_q, &wait);
+	    j->flags.inwrite = 0;
 	}
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(&j->write_q, &wait);
@@ -7134,307 +7132,298 @@ IXJ *ixj_pcmcia_probe(unsigned long dsp, unsigned long xilinx)
 
 EXPORT_SYMBOL(ixj_pcmcia_probe);		/* For PCMCIA */
 
-static int ixj_get_status_proc(char *buf)
+static int proc_ixj_show(struct seq_file *m, void *v)
 {
-	int len;
 	int cnt;
 	IXJ *j;
-	len = 0;
-	len += sprintf(buf + len, "\nDriver version %i.%i.%i", IXJ_VER_MAJOR, IXJ_VER_MINOR, IXJ_BLD_VER);
-	len += sprintf(buf + len, "\nsizeof IXJ struct %Zd bytes", sizeof(IXJ));
-	len += sprintf(buf + len, "\nsizeof DAA struct %Zd bytes", sizeof(DAA_REGS));
-	len += sprintf(buf + len, "\nUsing old telephony API");
-	len += sprintf(buf + len, "\nDebug Level %d\n", ixjdebug);
+	seq_printf(m, "\nDriver version %i.%i.%i", IXJ_VER_MAJOR, IXJ_VER_MINOR, IXJ_BLD_VER);
+	seq_printf(m, "\nsizeof IXJ struct %Zd bytes", sizeof(IXJ));
+	seq_printf(m, "\nsizeof DAA struct %Zd bytes", sizeof(DAA_REGS));
+	seq_printf(m, "\nUsing old telephony API");
+	seq_printf(m, "\nDebug Level %d\n", ixjdebug);
 
 	for (cnt = 0; cnt < IXJMAX; cnt++) {
 		j = get_ixj(cnt);
 		if(j==NULL)
 			continue;
 		if (j->DSPbase) {
-			len += sprintf(buf + len, "\nCard Num %d", cnt);
-			len += sprintf(buf + len, "\nDSP Base Address 0x%4.4x", j->DSPbase);
+			seq_printf(m, "\nCard Num %d", cnt);
+			seq_printf(m, "\nDSP Base Address 0x%4.4x", j->DSPbase);
 			if (j->cardtype != QTI_PHONEJACK)
-				len += sprintf(buf + len, "\nXILINX Base Address 0x%4.4x", j->XILINXbase);
-			len += sprintf(buf + len, "\nDSP Type %2.2x%2.2x", j->dsp.high, j->dsp.low);
-			len += sprintf(buf + len, "\nDSP Version %2.2x.%2.2x", j->ver.high, j->ver.low);
-			len += sprintf(buf + len, "\nSerial Number %8.8x", j->serial);
+				seq_printf(m, "\nXILINX Base Address 0x%4.4x", j->XILINXbase);
+			seq_printf(m, "\nDSP Type %2.2x%2.2x", j->dsp.high, j->dsp.low);
+			seq_printf(m, "\nDSP Version %2.2x.%2.2x", j->ver.high, j->ver.low);
+			seq_printf(m, "\nSerial Number %8.8x", j->serial);
 			switch (j->cardtype) {
 			case (QTI_PHONEJACK):
-				len += sprintf(buf + len, "\nCard Type = Internet PhoneJACK");
+				seq_printf(m, "\nCard Type = Internet PhoneJACK");
 				break;
 			case (QTI_LINEJACK):
-				len += sprintf(buf + len, "\nCard Type = Internet LineJACK");
+				seq_printf(m, "\nCard Type = Internet LineJACK");
 				if (j->flags.g729_loaded)
-					len += sprintf(buf + len, " w/G.729 A/B");
-				len += sprintf(buf + len, " Country = %d", j->daa_country);
+					seq_printf(m, " w/G.729 A/B");
+				seq_printf(m, " Country = %d", j->daa_country);
 				break;
 			case (QTI_PHONEJACK_LITE):
-				len += sprintf(buf + len, "\nCard Type = Internet PhoneJACK Lite");
+				seq_printf(m, "\nCard Type = Internet PhoneJACK Lite");
 				if (j->flags.g729_loaded)
-					len += sprintf(buf + len, " w/G.729 A/B");
+					seq_printf(m, " w/G.729 A/B");
 				break;
 			case (QTI_PHONEJACK_PCI):
-				len += sprintf(buf + len, "\nCard Type = Internet PhoneJACK PCI");
+				seq_printf(m, "\nCard Type = Internet PhoneJACK PCI");
 				if (j->flags.g729_loaded)
-					len += sprintf(buf + len, " w/G.729 A/B");
+					seq_printf(m, " w/G.729 A/B");
 				break;
 			case (QTI_PHONECARD):
-				len += sprintf(buf + len, "\nCard Type = Internet PhoneCARD");
+				seq_printf(m, "\nCard Type = Internet PhoneCARD");
 				if (j->flags.g729_loaded)
-					len += sprintf(buf + len, " w/G.729 A/B");
-				len += sprintf(buf + len, "\nSmart Cable %spresent", j->pccr1.bits.drf ? "not " : "");
+					seq_printf(m, " w/G.729 A/B");
+				seq_printf(m, "\nSmart Cable %spresent", j->pccr1.bits.drf ? "not " : "");
 				if (!j->pccr1.bits.drf)
-					len += sprintf(buf + len, "\nSmart Cable type %d", j->flags.pcmciasct);
-				len += sprintf(buf + len, "\nSmart Cable state %d", j->flags.pcmciastate);
+					seq_printf(m, "\nSmart Cable type %d", j->flags.pcmciasct);
+				seq_printf(m, "\nSmart Cable state %d", j->flags.pcmciastate);
 				break;
 			default:
-				len += sprintf(buf + len, "\nCard Type = %d", j->cardtype);
+				seq_printf(m, "\nCard Type = %d", j->cardtype);
 				break;
 			}
-			len += sprintf(buf + len, "\nReaders %d", j->readers);
-			len += sprintf(buf + len, "\nWriters %d", j->writers);
+			seq_printf(m, "\nReaders %d", j->readers);
+			seq_printf(m, "\nWriters %d", j->writers);
 			add_caps(j);
-			len += sprintf(buf + len, "\nCapabilities %d", j->caps);
+			seq_printf(m, "\nCapabilities %d", j->caps);
 			if (j->dsp.low != 0x20)
-				len += sprintf(buf + len, "\nDSP Processor load %d", j->proc_load);
+				seq_printf(m, "\nDSP Processor load %d", j->proc_load);
 			if (j->flags.cidsent)
-				len += sprintf(buf + len, "\nCaller ID data sent");
+				seq_printf(m, "\nCaller ID data sent");
 			else
-				len += sprintf(buf + len, "\nCaller ID data not sent");
+				seq_printf(m, "\nCaller ID data not sent");
 
-			len += sprintf(buf + len, "\nPlay CODEC ");
+			seq_printf(m, "\nPlay CODEC ");
 			switch (j->play_codec) {
 			case G723_63:
-				len += sprintf(buf + len, "G.723.1 6.3");
+				seq_printf(m, "G.723.1 6.3");
 				break;
 			case G723_53:
-				len += sprintf(buf + len, "G.723.1 5.3");
+				seq_printf(m, "G.723.1 5.3");
 				break;
 			case TS85:
-				len += sprintf(buf + len, "TrueSpeech 8.5");
+				seq_printf(m, "TrueSpeech 8.5");
 				break;
 			case TS48:
-				len += sprintf(buf + len, "TrueSpeech 4.8");
+				seq_printf(m, "TrueSpeech 4.8");
 				break;
 			case TS41:
-				len += sprintf(buf + len, "TrueSpeech 4.1");
+				seq_printf(m, "TrueSpeech 4.1");
 				break;
 			case G728:
-				len += sprintf(buf + len, "G.728");
+				seq_printf(m, "G.728");
 				break;
 			case G729:
-				len += sprintf(buf + len, "G.729");
+				seq_printf(m, "G.729");
 				break;
 			case G729B:
-				len += sprintf(buf + len, "G.729B");
+				seq_printf(m, "G.729B");
 				break;
 			case ULAW:
-				len += sprintf(buf + len, "uLaw");
+				seq_printf(m, "uLaw");
 				break;
 			case ALAW:
-				len += sprintf(buf + len, "aLaw");
+				seq_printf(m, "aLaw");
 				break;
 			case LINEAR16:
-				len += sprintf(buf + len, "16 bit Linear");
+				seq_printf(m, "16 bit Linear");
 				break;
 			case LINEAR8:
-				len += sprintf(buf + len, "8 bit Linear");
+				seq_printf(m, "8 bit Linear");
 				break;
 			case WSS:
-				len += sprintf(buf + len, "Windows Sound System");
+				seq_printf(m, "Windows Sound System");
 				break;
 			default:
-				len += sprintf(buf + len, "NO CODEC CHOSEN");
+				seq_printf(m, "NO CODEC CHOSEN");
 				break;
 			}
-			len += sprintf(buf + len, "\nRecord CODEC ");
+			seq_printf(m, "\nRecord CODEC ");
 			switch (j->rec_codec) {
 			case G723_63:
-				len += sprintf(buf + len, "G.723.1 6.3");
+				seq_printf(m, "G.723.1 6.3");
 				break;
 			case G723_53:
-				len += sprintf(buf + len, "G.723.1 5.3");
+				seq_printf(m, "G.723.1 5.3");
 				break;
 			case TS85:
-				len += sprintf(buf + len, "TrueSpeech 8.5");
+				seq_printf(m, "TrueSpeech 8.5");
 				break;
 			case TS48:
-				len += sprintf(buf + len, "TrueSpeech 4.8");
+				seq_printf(m, "TrueSpeech 4.8");
 				break;
 			case TS41:
-				len += sprintf(buf + len, "TrueSpeech 4.1");
+				seq_printf(m, "TrueSpeech 4.1");
 				break;
 			case G728:
-				len += sprintf(buf + len, "G.728");
+				seq_printf(m, "G.728");
 				break;
 			case G729:
-				len += sprintf(buf + len, "G.729");
+				seq_printf(m, "G.729");
 				break;
 			case G729B:
-				len += sprintf(buf + len, "G.729B");
+				seq_printf(m, "G.729B");
 				break;
 			case ULAW:
-				len += sprintf(buf + len, "uLaw");
+				seq_printf(m, "uLaw");
 				break;
 			case ALAW:
-				len += sprintf(buf + len, "aLaw");
+				seq_printf(m, "aLaw");
 				break;
 			case LINEAR16:
-				len += sprintf(buf + len, "16 bit Linear");
+				seq_printf(m, "16 bit Linear");
 				break;
 			case LINEAR8:
-				len += sprintf(buf + len, "8 bit Linear");
+				seq_printf(m, "8 bit Linear");
 				break;
 			case WSS:
-				len += sprintf(buf + len, "Windows Sound System");
+				seq_printf(m, "Windows Sound System");
 				break;
 			default:
-				len += sprintf(buf + len, "NO CODEC CHOSEN");
+				seq_printf(m, "NO CODEC CHOSEN");
 				break;
 			}
-			len += sprintf(buf + len, "\nAEC ");
+			seq_printf(m, "\nAEC ");
 			switch (j->aec_level) {
 			case AEC_OFF:
-				len += sprintf(buf + len, "Off");
+				seq_printf(m, "Off");
 				break;
 			case AEC_LOW:
-				len += sprintf(buf + len, "Low");
+				seq_printf(m, "Low");
 				break;
 			case AEC_MED:
-				len += sprintf(buf + len, "Med");
+				seq_printf(m, "Med");
 				break;
 			case AEC_HIGH:
-				len += sprintf(buf + len, "High");
+				seq_printf(m, "High");
 				break;
 			case AEC_AUTO:
-				len += sprintf(buf + len, "Auto");
+				seq_printf(m, "Auto");
 				break;
 			case AEC_AGC:
-				len += sprintf(buf + len, "AEC/AGC");
+				seq_printf(m, "AEC/AGC");
 				break;
 			default:
-				len += sprintf(buf + len, "unknown(%i)", j->aec_level);
+				seq_printf(m, "unknown(%i)", j->aec_level);
 				break;
 			}
 
-			len += sprintf(buf + len, "\nRec volume 0x%x", get_rec_volume(j));
-			len += sprintf(buf + len, "\nPlay volume 0x%x", get_play_volume(j));
-			len += sprintf(buf + len, "\nDTMF prescale 0x%x", get_dtmf_prescale(j));
+			seq_printf(m, "\nRec volume 0x%x", get_rec_volume(j));
+			seq_printf(m, "\nPlay volume 0x%x", get_play_volume(j));
+			seq_printf(m, "\nDTMF prescale 0x%x", get_dtmf_prescale(j));
 
-			len += sprintf(buf + len, "\nHook state %d", j->hookstate); /* j->r_hook);	*/
+			seq_printf(m, "\nHook state %d", j->hookstate); /* j->r_hook);	*/
 
 			if (j->cardtype == QTI_LINEJACK) {
-				len += sprintf(buf + len, "\nPOTS Correct %d", j->flags.pots_correct);
-				len += sprintf(buf + len, "\nPSTN Present %d", j->flags.pstn_present);
-				len += sprintf(buf + len, "\nPSTN Check %d", j->flags.pstncheck);
-				len += sprintf(buf + len, "\nPOTS to PSTN %d", j->flags.pots_pstn);
+				seq_printf(m, "\nPOTS Correct %d", j->flags.pots_correct);
+				seq_printf(m, "\nPSTN Present %d", j->flags.pstn_present);
+				seq_printf(m, "\nPSTN Check %d", j->flags.pstncheck);
+				seq_printf(m, "\nPOTS to PSTN %d", j->flags.pots_pstn);
 				switch (j->daa_mode) {
 				case SOP_PU_SLEEP:
-					len += sprintf(buf + len, "\nDAA PSTN On Hook");
+					seq_printf(m, "\nDAA PSTN On Hook");
 					break;
 				case SOP_PU_RINGING:
-					len += sprintf(buf + len, "\nDAA PSTN Ringing");
-					len += sprintf(buf + len, "\nRinging state = %d", j->cadence_f[4].state);
+					seq_printf(m, "\nDAA PSTN Ringing");
+					seq_printf(m, "\nRinging state = %d", j->cadence_f[4].state);
 					break;
 				case SOP_PU_CONVERSATION:
-					len += sprintf(buf + len, "\nDAA PSTN Off Hook");
+					seq_printf(m, "\nDAA PSTN Off Hook");
 					break;
 				case SOP_PU_PULSEDIALING:
-					len += sprintf(buf + len, "\nDAA PSTN Pulse Dialing");
+					seq_printf(m, "\nDAA PSTN Pulse Dialing");
 					break;
 				}
-				len += sprintf(buf + len, "\nDAA RMR = %d", j->m_DAAShadowRegs.SOP_REGS.SOP.cr1.bitreg.RMR);
-				len += sprintf(buf + len, "\nDAA VDD OK = %d", j->m_DAAShadowRegs.XOP_REGS.XOP.xr0.bitreg.VDD_OK);
-				len += sprintf(buf + len, "\nDAA CR0 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr0.reg);
-				len += sprintf(buf + len, "\nDAA CR1 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr1.reg);
-				len += sprintf(buf + len, "\nDAA CR2 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr2.reg);
-				len += sprintf(buf + len, "\nDAA CR3 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr3.reg);
-				len += sprintf(buf + len, "\nDAA CR4 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr4.reg);
-				len += sprintf(buf + len, "\nDAA CR5 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr5.reg);
-				len += sprintf(buf + len, "\nDAA XR0 = 0x%02x", j->m_DAAShadowRegs.XOP_REGS.XOP.xr0.reg);
-				len += sprintf(buf + len, "\nDAA ringstop %ld - jiffies %ld", j->pstn_ring_stop, jiffies);
+				seq_printf(m, "\nDAA RMR = %d", j->m_DAAShadowRegs.SOP_REGS.SOP.cr1.bitreg.RMR);
+				seq_printf(m, "\nDAA VDD OK = %d", j->m_DAAShadowRegs.XOP_REGS.XOP.xr0.bitreg.VDD_OK);
+				seq_printf(m, "\nDAA CR0 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr0.reg);
+				seq_printf(m, "\nDAA CR1 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr1.reg);
+				seq_printf(m, "\nDAA CR2 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr2.reg);
+				seq_printf(m, "\nDAA CR3 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr3.reg);
+				seq_printf(m, "\nDAA CR4 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr4.reg);
+				seq_printf(m, "\nDAA CR5 = 0x%02x", j->m_DAAShadowRegs.SOP_REGS.SOP.cr5.reg);
+				seq_printf(m, "\nDAA XR0 = 0x%02x", j->m_DAAShadowRegs.XOP_REGS.XOP.xr0.reg);
+				seq_printf(m, "\nDAA ringstop %ld - jiffies %ld", j->pstn_ring_stop, jiffies);
 			}
 			switch (j->port) {
 			case PORT_POTS:
-				len += sprintf(buf + len, "\nPort POTS");
+				seq_printf(m, "\nPort POTS");
 				break;
 			case PORT_PSTN:
-				len += sprintf(buf + len, "\nPort PSTN");
+				seq_printf(m, "\nPort PSTN");
 				break;
 			case PORT_SPEAKER:
-				len += sprintf(buf + len, "\nPort SPEAKER/MIC");
+				seq_printf(m, "\nPort SPEAKER/MIC");
 				break;
 			case PORT_HANDSET:
-				len += sprintf(buf + len, "\nPort HANDSET");
+				seq_printf(m, "\nPort HANDSET");
 				break;
 			}
 			if (j->dsp.low == 0x21 || j->dsp.low == 0x22) {
-				len += sprintf(buf + len, "\nSLIC state ");
+				seq_printf(m, "\nSLIC state ");
 				switch (SLIC_GetState(j)) {
 				case PLD_SLIC_STATE_OC:
-					len += sprintf(buf + len, "OC");
+					seq_printf(m, "OC");
 					break;
 				case PLD_SLIC_STATE_RINGING:
-					len += sprintf(buf + len, "RINGING");
+					seq_printf(m, "RINGING");
 					break;
 				case PLD_SLIC_STATE_ACTIVE:
-					len += sprintf(buf + len, "ACTIVE");
+					seq_printf(m, "ACTIVE");
 					break;
 				case PLD_SLIC_STATE_OHT:	/* On-hook transmit */
-					len += sprintf(buf + len, "OHT");
+					seq_printf(m, "OHT");
 					break;
 				case PLD_SLIC_STATE_TIPOPEN:
-					len += sprintf(buf + len, "TIPOPEN");
+					seq_printf(m, "TIPOPEN");
 					break;
 				case PLD_SLIC_STATE_STANDBY:
-					len += sprintf(buf + len, "STANDBY");
+					seq_printf(m, "STANDBY");
 					break;
 				case PLD_SLIC_STATE_APR:	/* Active polarity reversal */
-					len += sprintf(buf + len, "APR");
+					seq_printf(m, "APR");
 					break;
 				case PLD_SLIC_STATE_OHTPR:	/* OHT polarity reversal */
-					len += sprintf(buf + len, "OHTPR");
+					seq_printf(m, "OHTPR");
 					break;
 				default:
-					len += sprintf(buf + len, "%d", SLIC_GetState(j));
+					seq_printf(m, "%d", SLIC_GetState(j));
 					break;
 				}
 			}
-			len += sprintf(buf + len, "\nBase Frame %2.2x.%2.2x", j->baseframe.high, j->baseframe.low);
-			len += sprintf(buf + len, "\nCID Base Frame %2d", j->cid_base_frame_size);
+			seq_printf(m, "\nBase Frame %2.2x.%2.2x", j->baseframe.high, j->baseframe.low);
+			seq_printf(m, "\nCID Base Frame %2d", j->cid_base_frame_size);
 #ifdef PERFMON_STATS
-			len += sprintf(buf + len, "\nTimer Checks %ld", j->timerchecks);
-			len += sprintf(buf + len, "\nRX Ready Checks %ld", j->rxreadycheck);
-			len += sprintf(buf + len, "\nTX Ready Checks %ld", j->txreadycheck);
-			len += sprintf(buf + len, "\nFrames Read %ld", j->framesread);
-			len += sprintf(buf + len, "\nFrames Written %ld", j->frameswritten);
-			len += sprintf(buf + len, "\nDry Buffer %ld", j->drybuffer);
-			len += sprintf(buf + len, "\nRead Waits %ld", j->read_wait);
-			len += sprintf(buf + len, "\nWrite Waits %ld", j->write_wait);
-                        len += sprintf(buf + len, "\nStatus Waits %ld", j->statuswait);
-                        len += sprintf(buf + len, "\nStatus Wait Fails %ld", j->statuswaitfail);
-                        len += sprintf(buf + len, "\nPControl Waits %ld", j->pcontrolwait);
-                        len += sprintf(buf + len, "\nPControl Wait Fails %ld", j->pcontrolwaitfail);
-                        len += sprintf(buf + len, "\nIs Control Ready Checks %ld", j->iscontrolready);
-                        len += sprintf(buf + len, "\nIs Control Ready Check failures %ld", j->iscontrolreadyfail);
+			seq_printf(m, "\nTimer Checks %ld", j->timerchecks);
+			seq_printf(m, "\nRX Ready Checks %ld", j->rxreadycheck);
+			seq_printf(m, "\nTX Ready Checks %ld", j->txreadycheck);
+			seq_printf(m, "\nFrames Read %ld", j->framesread);
+			seq_printf(m, "\nFrames Written %ld", j->frameswritten);
+			seq_printf(m, "\nDry Buffer %ld", j->drybuffer);
+			seq_printf(m, "\nRead Waits %ld", j->read_wait);
+			seq_printf(m, "\nWrite Waits %ld", j->write_wait);
+            seq_printf(m, "\nStatus Waits %ld", j->statuswait);
+            seq_printf(m, "\nStatus Wait Fails %ld", j->statuswaitfail);
+            seq_printf(m, "\nPControl Waits %ld", j->pcontrolwait);
+            seq_printf(m, "\nPControl Wait Fails %ld", j->pcontrolwaitfail);
+            seq_printf(m, "\nIs Control Ready Checks %ld", j->iscontrolready);
+            seq_printf(m, "\nIs Control Ready Check failures %ld", j->iscontrolreadyfail);
 
 #endif
-			len += sprintf(buf + len, "\n");
+			seq_printf(m, "\n");
 		}
 	}
-	return len;
+	return 0;
 }
 
-static int ixj_read_proc(char *page, char **start, off_t off,
-                              int count, int *eof, void *data)
+static int ixj_proc_open(struct inode *inode, struct file *file)
 {
-        int len = ixj_get_status_proc(page);
-        if (len <= off+count) *eof = 1;
-        *start = page + off;
-        len -= off;
-        if (len>count) len = count;
-        if (len<0) len = 0;
-        return len;
+    return single_open(file, proc_ixj_show, NULL);
 }
 
 
@@ -7742,6 +7731,13 @@ static int __init ixj_probe_pci(int *cnt)
 	return probe;
 }
 
+static const struct file_operations proc_ixj_operations = {
+    .open       = ixj_proc_open,
+    .read       = seq_read,
+    .llseek     = seq_lseek,
+    .release    = seq_release
+};
+
 static int __init ixj_init(void)
 {
 	int cnt = 0;
@@ -7760,7 +7756,7 @@ static int __init ixj_init(void)
 		return probe;
 	}
 	printk(KERN_INFO "ixj driver initialized.\n");
-	create_proc_read_entry ("ixj", 0, NULL, ixj_read_proc, NULL);
+    proc_create("ixj", 0, NULL, &proc_ixj_operations);
 	return probe;
 }
 
