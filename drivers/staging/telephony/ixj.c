@@ -2759,27 +2759,32 @@ static ssize_t ixj_read(struct file * file_p, char __user *buf, size_t length, l
 	add_wait_queue(&j->read_q, &wait);
 	set_current_state(TASK_INTERRUPTIBLE);
 	mb();
-
-	while (!j->read_buffer_ready || (j->dtmf_state && j->flags.dtmf_oob)) {
-		++j->read_wait;
-		if (file_p->f_flags & O_NONBLOCK) {
-			set_current_state(TASK_RUNNING);
-			remove_wait_queue(&j->read_q, &wait);
-			j->flags.inread = 0;
-			return -EAGAIN;
-		}
-		if (!ixj_hookstate(j)) {
-			set_current_state(TASK_RUNNING);
-			remove_wait_queue(&j->read_q, &wait);
-			j->flags.inread = 0;
-			return 0;
-		}
-        wait_event_interruptible(j->read_q, signal_pending(current));
-        // TODO(q3k): Should we do this?
-		//set_current_state(TASK_RUNNING);
+    
+    if (file_p->f_flags & O_NONBLOCK) {
+		set_current_state(TASK_RUNNING);
 		remove_wait_queue(&j->read_q, &wait);
 		j->flags.inread = 0;
+		return -EAGAIN;
 	}
+
+    ++j->read_wait;
+    wait_event_interruptible(j->read_q,
+                j->read_buffer_ready ||
+                !(j->dtmf_state && j->flags.dtmf_oob) ||
+                !ixj_hookstate(j));
+
+    if (signal_pending(current)) {
+		set_current_state(TASK_RUNNING);
+		remove_wait_queue(&j->read_q, &wait);
+		j->flags.inread = 0;
+        return -EINTR;
+    }
+    if (!ixj_hookstate(j)) {
+        set_current_state(TASK_RUNNING);
+        remove_wait_queue(&j->read_q, &wait);
+        j->flags.inread = 0;
+        return 0;
+    }
 
 	remove_wait_queue(&j->read_q, &wait);
 	set_current_state(TASK_RUNNING);
@@ -2838,27 +2843,25 @@ static ssize_t ixj_write(struct file *file_p, const char __user *buf, size_t cou
 	set_current_state(TASK_INTERRUPTIBLE);
 	mb();
 
-
-	while (!j->write_buffers_empty) {
-		++j->write_wait;
-		if (file_p->f_flags & O_NONBLOCK) {
-			set_current_state(TASK_RUNNING);
-			remove_wait_queue(&j->write_q, &wait);
-			j->flags.inwrite = 0;
-			return -EAGAIN;
-		}
-		if (!ixj_hookstate(j)) {
-			set_current_state(TASK_RUNNING);
-			remove_wait_queue(&j->write_q, &wait);
-			j->flags.inwrite = 0;
-			return 0;
-		}
-        wait_event_interruptible(j->write_q, signal_pending(current));
-        // TODO(q3k): should we do this?
-		//set_current_state(TASK_RUNNING);
+    if (file_p->f_flags & O_NONBLOCK) {
+		set_current_state(TASK_RUNNING);
 		remove_wait_queue(&j->write_q, &wait);
-	    j->flags.inwrite = 0;
+		j->flags.inwrite = 0;
+		return -EAGAIN;
 	}
+
+	++j->write_wait;
+    wait_event_interruptible(j->write_q,
+            j->write_buffers_empty ||
+            !ixj_hookstate(j));
+
+	if (!ixj_hookstate(j)) {
+	    set_current_state(TASK_RUNNING);
+		remove_wait_queue(&j->write_q, &wait);
+		j->flags.inwrite = 0;
+		return 0;
+	}
+
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(&j->write_q, &wait);
 	if (j->write_buffer_wp + count >= j->write_buffer_end)
